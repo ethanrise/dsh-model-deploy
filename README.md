@@ -82,6 +82,12 @@ The remote target currently needs `python3`, `numpy`, and `onnxruntime` already 
 - `benchmark_local`
 - `benchmark_remote_ssh`
 
+`benchmark_local` and `benchmark_remote_ssh` accept `inputShapes` (e.g. `{"images": [1, 3, 640, 640]}`) and `defaultDynamicDim` for dynamic-input models; `benchmark_local` also accepts `requireProvider` as a gate check.
+
+Benchmark results report the execution provider the ONNX Runtime session **actually** used. When ORT silently falls back (e.g. CUDA listed as available but its libraries fail to load), `provider_fallback` is `true` and `fallback_reason` carries ORT's own error. `runtime` records the Python interpreter, ONNX Runtime and NumPy versions that produced the numbers.
+
+The Python interpreter is chosen from `DSH_MODEL_DEPLOY_PYTHON`, then `python3`/`python`, then conda/miniforge environments under the home directory — the first that can import `numpy`, `onnx` and `onnxruntime`. DSH's MCP client scrubs inherited `DSH_*` variables, so to pin an interpreter under DSH set it in the patch entry's `env`.
+
 SSH credentials are not passed to the model. Use `~/.ssh/config`, `ssh-agent`, or the operating system's normal SSH credential handling.
 
 ## What V0.1 does not do

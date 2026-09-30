@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import os
+import platform
+import re
 import statistics
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .schema import benchmark_result
+try:
+    from .schema import benchmark_result
+except ImportError:  # copied to a remote target and run as a plain script
+    from schema import benchmark_result
 
 ONNX_TO_NUMPY = {
     "tensor(float)": np.float32,
@@ -52,6 +60,35 @@ def _input_array(meta: Any, override: list[int] | None, default_dynamic_dim: int
     return np.random.default_rng(0).random(shape).astype(dtype)
 
 
+def _create_session(ort: Any, model: str, provider: str) -> tuple[Any, str]:
+    """Create a session while capturing native stderr, where ORT logs provider load failures."""
+    try:
+        fd = sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        return ort.InferenceSession(model, providers=[provider]), ""
+    sys.stderr.flush()
+    saved = os.dup(fd)
+    with tempfile.TemporaryFile(mode="w+b") as capture:
+        os.dup2(capture.fileno(), fd)
+        try:
+            session = ort.InferenceSession(model, providers=[provider])
+        finally:
+            sys.stderr.flush()
+            os.dup2(saved, fd)
+            os.close(saved)
+        capture.seek(0)
+        log = capture.read().decode("utf-8", "replace")
+    if log:
+        sys.stderr.write(log)
+    return session, log
+
+
+def _fallback_reason(log: str) -> str | None:
+    log = re.sub(r"\x1b\[[0-9;]*m", "", log)
+    lines = [line.strip() for line in log.splitlines() if "error" in line.lower() or "require" in line.lower() or "fail" in line.lower()]
+    return "\n".join(lines[-5:]) or None
+
+
 def benchmark_onnx(
     model_path: str | Path,
     provider: str | None = None,
@@ -74,7 +111,13 @@ def benchmark_onnx(
     if provider not in available:
         raise RuntimeError(f"Provider {provider!r} unavailable. Available: {available}")
 
-    session = ort.InferenceSession(str(Path(model_path).expanduser()), providers=[provider])
+    requested_provider = provider
+    session, session_log = _create_session(ort, str(Path(model_path).expanduser()), provider)
+    # ONNX Runtime silently falls back to CPU when the requested provider fails to
+    # initialize (e.g. CUDA listed as available but no working driver). Report the
+    # provider the session actually uses, not the one that was requested.
+    active_providers = session.get_providers()
+    provider = active_providers[0] if active_providers else requested_provider
     overrides = input_shapes or {}
     known_inputs = {meta.name for meta in session.get_inputs()}
     unknown = sorted(set(overrides) - known_inputs)
@@ -123,4 +166,13 @@ def benchmark_onnx(
         metrics=metrics,
         inputs=inputs,
         available_providers=available,
+        requested_provider=requested_provider,
+        active_providers=active_providers,
+        fallback_reason=_fallback_reason(session_log) if provider != requested_provider else None,
+        runtime={
+            "python": sys.executable,
+            "python_version": platform.python_version(),
+            "onnxruntime": getattr(ort, "__version__", None),
+            "numpy": np.__version__,
+        },
     )

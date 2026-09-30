@@ -9,3 +9,4 @@ build/
 *.onnx
 *.engine
 benchmark-results/
+node_modules/

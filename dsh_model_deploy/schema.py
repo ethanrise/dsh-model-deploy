@@ -17,6 +17,10 @@ def benchmark_result(
     available_providers: list[str],
     target: str | None = None,
     environment: dict[str, Any] | None = None,
+    requested_provider: str | None = None,
+    active_providers: list[str] | None = None,
+    fallback_reason: str | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -27,7 +31,12 @@ def benchmark_result(
         "execution": execution,
         "target": target or "local",
         "provider": provider,
+        "requested_provider": requested_provider or provider,
+        "active_providers": active_providers or [provider],
+        "provider_fallback": requested_provider is not None and requested_provider != provider,
+        "fallback_reason": fallback_reason,
         "available_providers": available_providers,
+        "runtime": runtime or {},
         "metrics": metrics,
         "inputs": inputs,
         "environment": environment or {},

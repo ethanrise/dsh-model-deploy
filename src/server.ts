@@ -6,15 +6,15 @@ import path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
+import { resolvePython } from './python.js'
 
 const execFileAsync = promisify(execFile)
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const python = process.env.DSH_MODEL_DEPLOY_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 
 async function runCli(args: string[]) {
   try {
     const { stdout, stderr } = await execFileAsync(
-      python,
+      resolvePython(),
       ['-m', 'dsh_model_deploy.cli', ...args],
       { cwd: packageRoot, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60 * 1000 },
     )
@@ -31,6 +31,20 @@ const output = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
   structuredContent: value as Record<string, unknown>,
 })
+
+const shapeInputs = {
+  inputShapes: z.record(z.string(), z.array(z.number().int().positive()).min(1)).optional()
+    .describe('Per-input shape overrides for dynamic models, e.g. {"images": [1, 3, 640, 640]}'),
+  defaultDynamicDim: z.number().int().positive().optional()
+    .describe('Value substituted for dynamic dimensions without an explicit override (default 1)'),
+}
+
+function shapeArgs(inputShapes?: Record<string, number[]>, defaultDynamicDim?: number) {
+  const args: string[] = []
+  for (const [name, shape] of Object.entries(inputShapes ?? {})) args.push('--input-shape', `${name}=${shape.join('x')}`)
+  if (defaultDynamicDim !== undefined) args.push('--default-dynamic-dim', String(defaultDynamicDim))
+  return args
+}
 
 const server = new McpServer({ name: 'dsh-model-deploy', version: '0.1.0' })
 
@@ -53,13 +67,17 @@ server.registerTool('benchmark_local', {
     minFps: z.number().positive().optional(),
     maxP95Ms: z.number().positive().optional(),
     maxModelMb: z.number().positive().optional(),
+    requireProvider: z.string().optional()
+      .describe('Gate check: fail unless this execution provider was actually used (e.g. CUDAExecutionProvider)'),
+    ...shapeInputs,
   },
-}, async ({ model, provider, warmup, runs, minFps, maxP95Ms, maxModelMb }) => {
-  const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs)]
+}, async ({ model, provider, warmup, runs, minFps, maxP95Ms, maxModelMb, requireProvider, inputShapes, defaultDynamicDim }) => {
+  const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim)]
   if (provider) args.push('--provider', provider)
   if (minFps !== undefined) args.push('--min-fps', String(minFps))
   if (maxP95Ms !== undefined) args.push('--max-p95-ms', String(maxP95Ms))
   if (maxModelMb !== undefined) args.push('--max-model-mb', String(maxModelMb))
+  if (requireProvider) args.push('--require-provider', requireProvider)
   return output(await runCli(args))
 })
 
@@ -71,9 +89,10 @@ server.registerTool('benchmark_remote_ssh', {
     provider: z.string().optional(),
     warmup: z.number().int().min(0).max(1000).default(10),
     runs: z.number().int().min(1).max(10000).default(50),
+    ...shapeInputs,
   },
-}, async ({ target, model, provider, warmup, runs }) => {
-  const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs)]
+}, async ({ target, model, provider, warmup, runs, inputShapes, defaultDynamicDim }) => {
+  const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim)]
   if (provider) args.push('--provider', provider)
   return output(await runCli(args))
 })

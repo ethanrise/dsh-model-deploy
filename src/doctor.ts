@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
+import { resolvePython } from './python.js'
 
-const python = process.env.DSH_MODEL_DEPLOY_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+const python = resolvePython()
+console.log(`[info] interpreter: ${python}`)
 const checks = [
   ['python', ['--version']],
   ['python modules', ['-c', 'import numpy, onnx, psutil; print("core modules ok")']],
