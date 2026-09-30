@@ -10,39 +10,24 @@ def evaluate_gate(
     max_p95_ms: float | None = None,
     max_model_mb: float | None = None,
     model_size_mb: float | None = None,
+    required_provider: str | None = None,
 ) -> dict[str, Any]:
+    metrics = benchmark.get("metrics", benchmark)
     checks: list[dict[str, Any]] = []
 
+    def add(metric: str, actual: Any, target: Any, operator: str, passed: bool) -> None:
+        checks.append({"metric": metric, "actual": actual, "target": target, "operator": operator, "passed": passed})
+
     if min_fps is not None:
-        actual = benchmark.get("fps")
-        checks.append({
-            "metric": "fps",
-            "actual": actual,
-            "target": min_fps,
-            "operator": ">=",
-            "passed": actual is not None and actual >= min_fps,
-        })
-
+        actual = metrics.get("fps")
+        add("fps", actual, min_fps, ">=", actual is not None and actual >= min_fps)
     if max_p95_ms is not None:
-        actual = benchmark.get("p95_ms")
-        checks.append({
-            "metric": "p95_ms",
-            "actual": actual,
-            "target": max_p95_ms,
-            "operator": "<=",
-            "passed": actual is not None and actual <= max_p95_ms,
-        })
-
+        actual = metrics.get("p95_ms")
+        add("p95_ms", actual, max_p95_ms, "<=", actual is not None and actual <= max_p95_ms)
     if max_model_mb is not None:
-        checks.append({
-            "metric": "model_size_mb",
-            "actual": model_size_mb,
-            "target": max_model_mb,
-            "operator": "<=",
-            "passed": model_size_mb is not None and model_size_mb <= max_model_mb,
-        })
+        add("model_size_mb", model_size_mb, max_model_mb, "<=", model_size_mb is not None and model_size_mb <= max_model_mb)
+    if required_provider is not None:
+        actual = benchmark.get("provider")
+        add("provider", actual, required_provider, "==", actual == required_provider)
 
-    return {
-        "status": "PASS" if all(item["passed"] for item in checks) else "FAIL",
-        "checks": checks,
-    }
+    return {"status": "PASS" if all(item["passed"] for item in checks) else "FAIL", "checks": checks}

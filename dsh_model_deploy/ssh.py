@@ -4,7 +4,6 @@ import json
 import shlex
 import shutil
 import subprocess
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,17 @@ def _run(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str
     return result
 
 
+def probe_ssh_target(target: str) -> dict[str, Any]:
+    _require("ssh")
+    probe = Path(__file__).resolve().parent / "remote_probe.py"
+    command = f"python3 - <<'PY'\n{probe.read_text(encoding='utf-8')}\nPY"
+    result = _run(["ssh", target, command], timeout=30)
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    payload["target"] = target
+    payload["ready"] = bool(payload.get("modules", {}).get("numpy") and payload.get("modules", {}).get("onnxruntime"))
+    return payload
+
+
 def benchmark_over_ssh(
     target: str,
     model_path: str | Path,
@@ -29,49 +39,41 @@ def benchmark_over_ssh(
     provider: str | None = None,
     warmup: int = 10,
     runs: int = 50,
+    input_shapes: dict[str, list[int]] | None = None,
+    default_dynamic_dim: int = 1,
 ) -> dict[str, Any]:
-    """Run an agentless benchmark on a POSIX SSH target using its existing Python/ORT environment."""
     _require("ssh")
     _require("scp")
+    preflight = probe_ssh_target(target)
+    if not preflight["ready"]:
+        raise RuntimeError(f"Remote target is not benchmark-ready: {preflight}")
+    if provider and provider not in preflight.get("ort_providers", []):
+        raise RuntimeError(f"Remote provider {provider!r} unavailable. Available: {preflight.get('ort_providers', [])}")
 
     model = Path(model_path).expanduser().resolve()
     if not model.is_file():
         raise FileNotFoundError(model)
 
     package_dir = Path(__file__).resolve().parent
-    benchmark_py = package_dir / "benchmark.py"
-    runner_py = package_dir / "remote_runner.py"
+    files = [package_dir / name for name in ("benchmark.py", "remote_runner.py", "schema.py")]
     remote_dir = f"/tmp/dsh-model-deploy-{uuid.uuid4().hex[:10]}"
-
     _run(["ssh", target, f"mkdir -p {shlex.quote(remote_dir)}"])
     try:
-        _run([
-            "scp",
-            str(model),
-            str(benchmark_py),
-            str(runner_py),
-            f"{target}:{remote_dir}/",
-        ], timeout=300)
-
-        remote_model = f"{remote_dir}/{model.name}"
-        command = [
-            "cd", shlex.quote(remote_dir), "&&",
-            "python3", "remote_runner.py", shlex.quote(remote_model),
-            "--warmup", str(warmup),
-            "--runs", str(runs),
+        _run(["scp", str(model), *(str(item) for item in files), f"{target}:{remote_dir}/"], timeout=300)
+        args = [
+            "python3", "remote_runner.py", shlex.quote(f"{remote_dir}/{model.name}"),
+            "--warmup", str(warmup), "--runs", str(runs),
+            "--default-dynamic-dim", str(default_dynamic_dim),
         ]
         if provider:
-            command.extend(["--provider", shlex.quote(provider)])
-
-        result = _run(["ssh", target, " ".join(command)], timeout=600)
+            args += ["--provider", shlex.quote(provider)]
+        for name, shape in (input_shapes or {}).items():
+            args += ["--input-shape", shlex.quote(f"{name}={'x'.join(map(str, shape))}")]
+        result = _run(["ssh", target, f"cd {shlex.quote(remote_dir)} && {' '.join(args)}"], timeout=600)
         payload = json.loads(result.stdout.strip().splitlines()[-1])
-        payload["ssh_target"] = target
+        payload["execution"] = "ssh"
+        payload["target"] = target
+        payload["environment"] = preflight
         return payload
     finally:
-        subprocess.run(
-            ["ssh", target, f"rm -rf {shlex.quote(remote_dir)}"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        subprocess.run(["ssh", target, f"rm -rf {shlex.quote(remote_dir)}"], capture_output=True, text=True, timeout=30, check=False)
