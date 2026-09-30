@@ -1,0 +1,11 @@
+- id: dsh-model-deploy-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: model-deploy
+    transport: stdio
+    command: dsh-model-deploy-mcp
+    args: []
+    env: {}
+    cwd: !!js process.cwd()
+    failOnStartupError: false
+    toolCallTimeoutMs: 600000
