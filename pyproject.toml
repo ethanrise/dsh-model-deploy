@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsh-model-deploy"
+version = "0.1.0"
+description = "Local or remote AI model deployment benchmarking for real hardware targets"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Ethan Zhao"}]
+dependencies = ["numpy>=1.24", "onnx>=1.16", "psutil>=5.9"]
+
+[project.optional-dependencies]
+runtime = ["onnxruntime>=1.18"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+dsh-model-deploy = "dsh_model_deploy.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dsh_model_deploy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
