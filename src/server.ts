@@ -11,26 +11,61 @@ import { resolvePython } from './python.js'
 const execFileAsync = promisify(execFile)
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+/** Last non-empty line of stderr: the Python exception message, without the traceback. */
+function lastLine(text: string) {
+  return text.trim().split('\n').map(line => line.trim()).filter(Boolean).pop() ?? ''
+}
+
 async function runCli(args: string[]) {
+  const python = resolvePython()
+  let stdout = ''
+  let stderr = ''
   try {
-    const { stdout, stderr } = await execFileAsync(
-      resolvePython(),
+    ({ stdout, stderr } = await execFileAsync(
+      python,
       ['-m', 'dsh_model_deploy.cli', ...args],
       { cwd: packageRoot, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60 * 1000 },
-    )
-    const text = stdout.trim()
-    if (!text) throw new Error(stderr.trim() || 'dsh-model-deploy returned no output')
-    return JSON.parse(text)
+    ))
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`dsh-model-deploy execution failed: ${message}. Run dsh-model-deploy-doctor to inspect dependencies.`)
+    const failure = error as { stdout?: string, stderr?: string, killed?: boolean, code?: string | number }
+    // The CLI reports failures as one JSON line on stdout: {"error", "error_type"}.
+    try {
+      const payload = JSON.parse(lastLine(failure.stdout ?? ''))
+      if (payload?.error) throw new Error(`${payload.error_type}: ${payload.error}`)
+    } catch (parsed) {
+      if (parsed instanceof Error && !(parsed instanceof SyntaxError)) throw parsed
+    }
+    if (failure.killed) throw new Error('benchmark timed out after 10 minutes')
+    if (failure.code === 'ENOENT') throw new Error(`Python interpreter not found: ${python}. Run dsh-model-deploy-doctor.`)
+    const detail = lastLine(failure.stderr ?? '') || (error instanceof Error ? error.message : String(error))
+    throw new Error(`${detail} (interpreter: ${python}; run dsh-model-deploy-doctor if dependencies are missing)`)
   }
+  const text = stdout.trim()
+  if (!text) throw new Error(lastLine(stderr) || 'dsh-model-deploy returned no output')
+  return JSON.parse(text)
 }
 
 const output = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
   structuredContent: value as Record<string, unknown>,
 })
+
+const gateInputs = {
+  minFps: z.number().positive().optional(),
+  maxP95Ms: z.number().positive().optional(),
+  maxModelMb: z.number().positive().optional(),
+  requireProvider: z.string().optional()
+    .describe('Gate check: fail unless this execution provider was actually used (e.g. CUDAExecutionProvider)'),
+}
+
+function gateArgs({ minFps, maxP95Ms, maxModelMb, requireProvider }: { minFps?: number, maxP95Ms?: number, maxModelMb?: number, requireProvider?: string }) {
+  const args: string[] = []
+  if (minFps !== undefined) args.push('--min-fps', String(minFps))
+  if (maxP95Ms !== undefined) args.push('--max-p95-ms', String(maxP95Ms))
+  if (maxModelMb !== undefined) args.push('--max-model-mb', String(maxModelMb))
+  if (requireProvider) args.push('--require-provider', requireProvider)
+  return args
+}
 
 const shapeInputs = {
   inputShapes: z.record(z.string(), z.array(z.number().int().positive()).min(1)).optional()
@@ -64,22 +99,19 @@ server.registerTool('benchmark_local', {
     provider: z.string().optional(),
     warmup: z.number().int().min(0).max(1000).default(10),
     runs: z.number().int().min(1).max(10000).default(50),
-    minFps: z.number().positive().optional(),
-    maxP95Ms: z.number().positive().optional(),
-    maxModelMb: z.number().positive().optional(),
-    requireProvider: z.string().optional()
-      .describe('Gate check: fail unless this execution provider was actually used (e.g. CUDAExecutionProvider)'),
+    ...gateInputs,
     ...shapeInputs,
   },
-}, async ({ model, provider, warmup, runs, minFps, maxP95Ms, maxModelMb, requireProvider, inputShapes, defaultDynamicDim }) => {
-  const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim)]
+}, async ({ model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
+  const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
   if (provider) args.push('--provider', provider)
-  if (minFps !== undefined) args.push('--min-fps', String(minFps))
-  if (maxP95Ms !== undefined) args.push('--max-p95-ms', String(maxP95Ms))
-  if (maxModelMb !== undefined) args.push('--max-model-mb', String(maxModelMb))
-  if (requireProvider) args.push('--require-provider', requireProvider)
   return output(await runCli(args))
 })
+
+server.registerTool('ssh_preflight', {
+  description: 'Check whether an SSH target is benchmark-ready (python3, numpy, onnxruntime and its providers) without copying anything. Run before benchmark_remote_ssh.',
+  inputSchema: { target: z.string().min(1).describe('SSH host alias or user@host') },
+}, async ({ target }) => output(await runCli(['ssh-preflight', target])))
 
 server.registerTool('benchmark_remote_ssh', {
   description: 'Agentlessly benchmark an ONNX model on a POSIX SSH target using its existing Python and ONNX Runtime environment. Credentials remain in the user SSH configuration/agent.',
@@ -89,10 +121,11 @@ server.registerTool('benchmark_remote_ssh', {
     provider: z.string().optional(),
     warmup: z.number().int().min(0).max(1000).default(10),
     runs: z.number().int().min(1).max(10000).default(50),
+    ...gateInputs,
     ...shapeInputs,
   },
-}, async ({ target, model, provider, warmup, runs, inputShapes, defaultDynamicDim }) => {
-  const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim)]
+}, async ({ target, model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
+  const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
   if (provider) args.push('--provider', provider)
   return output(await runCli(args))
 })

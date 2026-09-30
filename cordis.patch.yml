@@ -1,8 +1,11 @@
-# dsh-model-deploy bundle patch：通过 dsh-mcp-client 把 model-deploy MCP 服务插入 profile。
+# dsh-model-deploy bundle patch.
 #
-# 不用裸命令名 `dsh-model-deploy-mcp`：harness 的 PATH 不包含 profile 的
-# node_modules/.bin，会 spawn ENOENT。改为用 harness 自身的 node 直接运行
-# 已安装包内 lib/server.js 的绝对路径（在 DSH_HOME/profiles/*/node_modules 下查找）。
+# 1. model-deploy MCP 服务：通过 dsh-mcp-client 插入。不用裸命令名
+#    `dsh-model-deploy-mcp`：harness 的 PATH 不包含 profile 的 node_modules/.bin，
+#    会 spawn ENOENT。改为用 harness 自身的 node 直接运行已安装包内 lib/server.js
+#    的绝对路径（在 DSH_HOME/profiles/*/node_modules 下查找）。
+# 2. model-deploy skill：包内 skills/ 不在 DSH 默认的 skill 发现根里，额外插入一个
+#    只扫描该目录的 dsh-skill-filesystem provider（不含默认根，避免重复扫描）。
 - insert:
     - id: dsh-model-deploy-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -15,3 +18,11 @@
         env: {}
         failOnStartupError: false
         toolCallTimeoutMs: 600000
+    - id: dsh-model-deploy-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: model-deploy
+        includeDefaultRoots: false
+        watch: false
+        customSkillDirs:
+          - !!js "(() => { const fs = process.getBuiltinModule('node:fs'); const path = process.getBuiltinModule('node:path'); const root = dshHomePath('profiles'); for (const name of fs.readdirSync(root)) { const dir = path.join(root, name, 'node_modules', 'dsh-model-deploy', 'skills'); if (fs.existsSync(dir)) return fs.realpathSync(dir) } throw new Error('dsh-model-deploy: skills/ not found under ' + root) })()"

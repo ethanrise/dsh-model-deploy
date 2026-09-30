@@ -14,8 +14,17 @@ def _require(binary: str) -> None:
         raise RuntimeError(f"{binary} not found in PATH")
 
 
+# Never prompt (no askpass/password hangs) and fail fast on unreachable hosts.
+SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+
+
 def _run(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    if args and args[0] in ("ssh", "scp"):
+        args = [args[0], *SSH_OPTIONS, *args[1:]]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{args[0]} timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Command failed: {args}")
     return result
@@ -76,4 +85,4 @@ def benchmark_over_ssh(
         payload["environment"] = preflight
         return payload
     finally:
-        subprocess.run(["ssh", target, f"rm -rf {shlex.quote(remote_dir)}"], capture_output=True, text=True, timeout=30, check=False)
+        subprocess.run(["ssh", *SSH_OPTIONS, target, f"rm -rf {shlex.quote(remote_dir)}"], capture_output=True, text=True, timeout=30, check=False)

@@ -60,10 +60,14 @@
     "zod": "^3.25.76"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-mcp-client": ">=0.1.5-alpha.1"
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.5-alpha.1",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.5-alpha.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill-filesystem": {
       "optional": true
     }
   }

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 from .benchmark import benchmark_onnx, parse_input_shapes
@@ -28,6 +30,17 @@ def _runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--report", help="Write .json or .md report")
 
 
+def _gate_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--min-fps", type=float); parser.add_argument("--max-p95-ms", type=float); parser.add_argument("--max-model-mb", type=float)
+    parser.add_argument("--require-provider")
+
+
+def _gate(args: argparse.Namespace, result: dict[str, Any], model_size_mb: float | None) -> dict[str, Any] | None:
+    if all(value is None for value in (args.min_fps, args.max_p95_ms, args.max_model_mb, args.require_provider)):
+        return None
+    return evaluate_gate(result, min_fps=args.min_fps, max_p95_ms=args.max_p95_ms, max_model_mb=args.max_model_mb, model_size_mb=model_size_mb, required_provider=args.require_provider)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dsh-model-deploy", description="Benchmark AI models against real local or remote deployment targets.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -38,12 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ssh-preflight", help="Check whether a remote target is benchmark-ready"); p.add_argument("target")
 
     p = sub.add_parser("bench", help="Benchmark ONNX Runtime locally")
-    p.add_argument("model"); _runtime_args(p)
-    p.add_argument("--min-fps", type=float); p.add_argument("--max-p95-ms", type=float); p.add_argument("--max-model-mb", type=float)
-    p.add_argument("--require-provider")
+    p.add_argument("model"); _runtime_args(p); _gate_args(p)
 
     p = sub.add_parser("remote-bench", help="Benchmark on a POSIX host over SSH")
-    p.add_argument("target"); p.add_argument("model"); _runtime_args(p)
+    p.add_argument("target"); p.add_argument("model"); _runtime_args(p); _gate_args(p)
 
     p = sub.add_parser("compare", help="Benchmark and compare two or more models locally")
     p.add_argument("models", nargs="+"); _runtime_args(p)
@@ -51,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    try:
+        _main()
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:  # single-line, machine-readable failure for the MCP adapter
+        print(json.dumps({"error": str(exc) or type(exc).__name__, "error_type": type(exc).__name__}, ensure_ascii=False))
+        sys.exit(1)
+
+
+def _main() -> None:
     args = build_parser().parse_args()
     if args.command == "inspect": _emit(inspect_model(args.model)); return
     if args.command == "env": _emit(probe_environment()); return
@@ -59,6 +80,9 @@ def main() -> None:
     shapes = parse_input_shapes(args.input_shape)
     if args.command == "remote-bench":
         result = benchmark_over_ssh(args.target, args.model, provider=args.provider, warmup=args.warmup, runs=args.runs, input_shapes=shapes, default_dynamic_dim=args.default_dynamic_dim)
+        gate = _gate(args, result, round(Path(args.model).expanduser().stat().st_size / (1024 ** 2), 3))
+        if gate is not None:
+            result = {"schema_version": "0.1", "kind": "deployment_evaluation", "benchmark": result, "gate": gate}
         _emit(result, args.report); return
     if args.command == "compare":
         result = compare_models(args.models, provider=args.provider, warmup=args.warmup, runs=args.runs, input_shapes=shapes, default_dynamic_dim=args.default_dynamic_dim)
@@ -67,8 +91,9 @@ def main() -> None:
     model = inspect_model(args.model)
     result = benchmark_onnx(args.model, provider=args.provider, warmup=args.warmup, runs=args.runs, input_shapes=shapes, default_dynamic_dim=args.default_dynamic_dim)
     output: dict[str, Any] = {"schema_version": "0.1", "kind": "deployment_evaluation", "model": model, "benchmark": result}
-    if any(value is not None for value in (args.min_fps, args.max_p95_ms, args.max_model_mb, args.require_provider)):
-        output["gate"] = evaluate_gate(result, min_fps=args.min_fps, max_p95_ms=args.max_p95_ms, max_model_mb=args.max_model_mb, model_size_mb=model["file_size_mb"], required_provider=args.require_provider)
+    gate = _gate(args, result, model["file_size_mb"])
+    if gate is not None:
+        output["gate"] = gate
     _emit(output, args.report)
 
 

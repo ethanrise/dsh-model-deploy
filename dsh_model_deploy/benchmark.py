@@ -144,6 +144,15 @@ def benchmark_onnx(
         return ordered[idx]
 
     avg = statistics.fmean(samples_ms)
+    stdev = statistics.stdev(samples_ms) if len(samples_ms) > 1 else 0.0
+    cv = stdev / avg if avg > 0 else 0.0
+    warnings: list[str] = []
+    if warmup < 5:
+        warnings.append(f"warmup={warmup} is low; early runs may include lazy init/caching and inflate latency")
+    if runs < 20:
+        warnings.append(f"runs={runs} is low; percentiles (especially P95/P99) are unreliable")
+    if cv > 0.15:
+        warnings.append(f"latency varies a lot between runs (cv={cv:.2f}); results may not be reproducible, re-run or increase runs")
     metrics = {
         "warmup_runs": warmup,
         "measured_runs": runs,
@@ -154,6 +163,8 @@ def benchmark_onnx(
         "min_ms": round(min(samples_ms), 3),
         "max_ms": round(max(samples_ms), 3),
         "fps": round(1000.0 / avg, 3) if avg > 0 else None,
+        "stdev_ms": round(stdev, 3),
+        "cv": round(cv, 3),
     }
     inputs = [
         {"name": meta.name, "model_shape": list(meta.shape), "benchmark_shape": list(feeds[meta.name].shape), "type": meta.type}
@@ -168,6 +179,7 @@ def benchmark_onnx(
         available_providers=available,
         requested_provider=requested_provider,
         active_providers=active_providers,
+        warnings=warnings,
         fallback_reason=_fallback_reason(session_log) if provider != requested_provider else None,
         runtime={
             "python": sys.executable,

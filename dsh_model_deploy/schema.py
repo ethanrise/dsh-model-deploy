@@ -21,6 +21,7 @@ def benchmark_result(
     active_providers: list[str] | None = None,
     fallback_reason: str | None = None,
     runtime: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -37,6 +38,7 @@ def benchmark_result(
         "fallback_reason": fallback_reason,
         "available_providers": available_providers,
         "runtime": runtime or {},
+        "warnings": warnings or [],
         "metrics": metrics,
         "inputs": inputs,
         "environment": environment or {},

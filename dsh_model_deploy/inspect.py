@@ -7,6 +7,13 @@ from typing import Any
 import onnx
 
 
+def _type_name(elem_type: int) -> str:
+    try:
+        return f"tensor({onnx.helper.tensor_dtype_to_np_dtype(elem_type).name})".replace("float32", "float").replace("float64", "double")
+    except Exception:
+        return f"tensor(elem_type={elem_type})"
+
+
 def _shape(value_info: Any) -> list[int | str | None]:
     dims: list[int | str | None] = []
     tensor_type = value_info.type.tensor_type
@@ -36,12 +43,12 @@ def inspect_model(path: str | Path) -> dict[str, Any]:
         parameter_count += count
 
     inputs = [
-        {"name": item.name, "shape": _shape(item), "elem_type": item.type.tensor_type.elem_type}
+        {"name": item.name, "shape": _shape(item), "elem_type": item.type.tensor_type.elem_type, "type": _type_name(item.type.tensor_type.elem_type)}
         for item in model.graph.input
         if item.name not in initializer_names
     ]
     outputs = [
-        {"name": item.name, "shape": _shape(item), "elem_type": item.type.tensor_type.elem_type}
+        {"name": item.name, "shape": _shape(item), "elem_type": item.type.tensor_type.elem_type, "type": _type_name(item.type.tensor_type.elem_type)}
         for item in model.graph.output
     ]
     operators = Counter(node.op_type for node in model.graph.node)
