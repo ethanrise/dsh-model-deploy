@@ -17,26 +17,37 @@ V0.1 focuses on ONNX + ONNX Runtime, with local execution on Windows/Linux and a
 
 ## Install
 
-### Python core
+### 1. Python runtime
+
+The plugin runs its benchmarks in Python. Any interpreter with these packages works:
+
+```bash
+pip install numpy onnx onnxruntime psutil
+```
+
+For CPU inference, standard `onnxruntime` is enough. GPU execution requires an ONNX Runtime build/provider compatible with the machine (e.g. `onnxruntime-gpu` with matching CUDA/cuDNN libraries); if the provider fails to load, results say so rather than reporting CPU numbers as GPU numbers.
+
+The plugin picks the interpreter automatically: `DSH_MODEL_DEPLOY_PYTHON` if set, then `python3`/`python`, then conda/miniforge environments under your home directory — the first one that can import `numpy`, `onnx` and `onnxruntime`.
+
+### 2. DSH plugin
+
+In DeepSeek Harness, open **Plugins → Add plugin** and enter:
+
+```
+https://github.com/ethanrise/dsh-model-deploy
+```
+
+(or a local checkout path). This registers the `model-deploy` MCP server and the `model-deploy` skill; no `npm link` or PATH setup is needed. Restart DSH after installing or updating.
+
+### Standalone CLI (optional)
 
 ```bash
 git clone https://github.com/ethanrise/dsh-model-deploy.git
 cd dsh-model-deploy
 pip install -e ".[runtime]"
+npm install && npm run build   # only needed after changing src/
+node lib/doctor.js             # shows which interpreter was chosen and checks dependencies
 ```
-
-For CPU inference, standard `onnxruntime` is enough. GPU execution requires an ONNX Runtime build/provider compatible with the target machine.
-
-### DSH plugin adapter
-
-```bash
-npm install
-npm run build
-npm link
-dsh-model-deploy-doctor
-```
-
-The MCP adapter invokes the Python core. Set `DSH_MODEL_DEPLOY_PYTHON` if the desired interpreter is not `python3` on Linux/macOS or `python` on Windows.
 
 ## CLI
 
@@ -80,9 +91,12 @@ The remote target currently needs `python3`, `numpy`, and `onnxruntime` already 
 - `model_inspect`
 - `deployment_environment`
 - `benchmark_local`
+- `ssh_preflight`
 - `benchmark_remote_ssh`
 
-`benchmark_local` and `benchmark_remote_ssh` accept `inputShapes` (e.g. `{"images": [1, 3, 640, 640]}`) and `defaultDynamicDim` for dynamic-input models; `benchmark_local` also accepts `requireProvider` as a gate check.
+Model paths must be absolute (or start with `~/`).
+
+`benchmark_local` and `benchmark_remote_ssh` accept `inputShapes` (e.g. `{"images": [1, 3, 640, 640]}`) and `defaultDynamicDim` for dynamic-input models, plus the gate arguments `minFps`, `maxP95Ms`, `maxModelMb` and `requireProvider`.
 
 Benchmark results report the execution provider the ONNX Runtime session **actually** used. When ORT silently falls back (e.g. CUDA listed as available but its libraries fail to load), `provider_fallback` is `true` and `fallback_reason` carries ORT's own error. `runtime` records the Python interpreter, ONNX Runtime and NumPy versions that produced the numbers.
 
