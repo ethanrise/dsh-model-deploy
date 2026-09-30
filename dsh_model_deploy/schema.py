@@ -34,7 +34,8 @@ def benchmark_result(
         "provider": provider,
         "requested_provider": requested_provider or provider,
         "active_providers": active_providers or [provider],
-        "provider_fallback": requested_provider is not None and requested_provider != provider,
+        # only an explicit request can fall back; "auto" means the tool chose the provider
+        "provider_fallback": requested_provider not in (None, "auto") and requested_provider != provider,
         "fallback_reason": fallback_reason,
         "available_providers": available_providers,
         "runtime": runtime or {},

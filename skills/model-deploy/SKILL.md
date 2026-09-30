@@ -11,6 +11,8 @@ Prefer measured evidence over estimates.
 
 ## Workflow
 
+Always pass the model as an absolute path; relative paths are rejected.
+
 1. `model_inspect` first: shapes, opset, operators, size, and whether inputs are dynamic.
 2. If `dynamic_inputs` is true, pass `inputShapes` (e.g. `{"images": [1, 3, 640, 640]}`) or `defaultDynamicDim` matching the real deployment batch/resolution. Say which shape was benchmarked.
 3. Local target: `deployment_environment`, then `benchmark_local`.
@@ -20,6 +22,7 @@ Prefer measured evidence over estimates.
 ## Reading results
 
 - `provider` is the execution provider the session **actually** used. If `provider_fallback` is true, say so explicitly, quote `fallback_reason`, and do not present the numbers as GPU/accelerator performance.
+- `requested_provider: "auto"` means no provider was specified; CUDA was tried if listed and CPU used otherwise. A failed CUDA load then appears in `warnings` / `fallback_reason` rather than as `provider_fallback`.
 - `runtime` records the interpreter and ONNX Runtime version that produced the numbers; mention it when comparing runs.
 - If `warnings` is non-empty (low warmup/runs, high `cv`), state that the numbers are unstable and prefer re-running with defaults (warmup 10, runs 50) or more.
 - Inputs are synthetic (random floats, zero integers). Latency is meaningful only for models whose cost does not depend on input values; integer inputs that control shapes (e.g. Reshape targets) will fail or be meaningless. This tool never checks accuracy.

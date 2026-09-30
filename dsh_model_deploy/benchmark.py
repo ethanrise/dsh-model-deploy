@@ -106,18 +106,22 @@ def benchmark_onnx(
         raise ValueError("warmup must be >= 0, runs >= 1, and default_dynamic_dim >= 1")
 
     available = ort.get_available_providers()
-    if provider is None:
+    # No explicit provider: prefer CUDA when listed, but treat a failed CUDA load as
+    # automatic selection of CPU rather than a fallback from an explicit request.
+    auto = provider is None
+    if auto:
         provider = "CUDAExecutionProvider" if "CUDAExecutionProvider" in available else "CPUExecutionProvider"
     if provider not in available:
         raise RuntimeError(f"Provider {provider!r} unavailable. Available: {available}")
 
-    requested_provider = provider
+    requested_provider = "auto" if auto else provider
+    tried_provider = provider
     session, session_log = _create_session(ort, str(Path(model_path).expanduser()), provider)
     # ONNX Runtime silently falls back to CPU when the requested provider fails to
     # initialize (e.g. CUDA listed as available but no working driver). Report the
     # provider the session actually uses, not the one that was requested.
     active_providers = session.get_providers()
-    provider = active_providers[0] if active_providers else requested_provider
+    provider = active_providers[0] if active_providers else tried_provider
     overrides = input_shapes or {}
     known_inputs = {meta.name for meta in session.get_inputs()}
     unknown = sorted(set(overrides) - known_inputs)
@@ -151,6 +155,8 @@ def benchmark_onnx(
         warnings.append(f"warmup={warmup} is low; early runs may include lazy init/caching and inflate latency")
     if runs < 20:
         warnings.append(f"runs={runs} is low; percentiles (especially P95/P99) are unreliable")
+    if auto and provider != tried_provider:
+        warnings.append(f"{tried_provider} is listed as available but failed to load; auto-selected {provider} (see fallback_reason)")
     if cv > 0.15:
         warnings.append(f"latency varies a lot between runs (cv={cv:.2f}); results may not be reproducible, re-run or increase runs")
     metrics = {
@@ -180,7 +186,7 @@ def benchmark_onnx(
         requested_provider=requested_provider,
         active_providers=active_providers,
         warnings=warnings,
-        fallback_reason=_fallback_reason(session_log) if provider != requested_provider else None,
+        fallback_reason=_fallback_reason(session_log) if provider != tried_provider else None,
         runtime={
             "python": sys.executable,
             "python_version": platform.python_version(),

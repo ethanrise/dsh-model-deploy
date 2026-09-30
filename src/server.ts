@@ -50,6 +50,14 @@ const output = (value: unknown) => ({
   structuredContent: value as Record<string, unknown>,
 })
 
+// The server runs with the plugin directory as cwd and cannot see the session's
+// workspace, so a relative path would silently resolve against the wrong directory.
+const modelPath = z.string().min(1)
+  .refine(value => path.isAbsolute(value) || value.startsWith('~/'), {
+    message: 'model must be an absolute path (or start with ~/); relative paths would resolve against the plugin install directory, not your workspace',
+  })
+  .describe('Absolute path to the .onnx model file')
+
 const gateInputs = {
   minFps: z.number().positive().optional(),
   maxP95Ms: z.number().positive().optional(),
@@ -85,7 +93,7 @@ const server = new McpServer({ name: 'dsh-model-deploy', version: '0.1.0' })
 
 server.registerTool('model_inspect', {
   description: 'Inspect an ONNX model without running inference: shapes, opset, parameter count, operators, size and dynamic inputs.',
-  inputSchema: { model: z.string().min(1) },
+  inputSchema: { model: modelPath },
 }, async ({ model }) => output(await runCli(['inspect', model])))
 
 server.registerTool('deployment_environment', {
@@ -93,9 +101,9 @@ server.registerTool('deployment_environment', {
 }, async () => output(await runCli(['env'])))
 
 server.registerTool('benchmark_local', {
-  description: 'Benchmark an ONNX model on the current machine with ONNX Runtime and optionally evaluate deployment constraints.',
+  description: 'Benchmark an ONNX model on the current machine with ONNX Runtime and optionally evaluate deployment constraints. Without `provider`, CUDA is tried when listed and CPU is used if it fails to load.',
   inputSchema: {
-    model: z.string().min(1),
+    model: modelPath,
     provider: z.string().optional(),
     warmup: z.number().int().min(0).max(1000).default(10),
     runs: z.number().int().min(1).max(10000).default(50),
@@ -117,7 +125,7 @@ server.registerTool('benchmark_remote_ssh', {
   description: 'Agentlessly benchmark an ONNX model on a POSIX SSH target using its existing Python and ONNX Runtime environment. Credentials remain in the user SSH configuration/agent.',
   inputSchema: {
     target: z.string().min(1).describe('SSH host alias or user@host'),
-    model: z.string().min(1),
+    model: modelPath,
     provider: z.string().optional(),
     warmup: z.number().int().min(0).max(1000).default(10),
     runs: z.number().int().min(1).max(10000).default(50),
