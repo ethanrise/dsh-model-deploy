@@ -89,53 +89,88 @@ function shapeArgs(inputShapes?: Record<string, number[]>, defaultDynamicDim?: n
   return args
 }
 
-const server = new McpServer({ name: 'dsh-model-deploy', version: '0.1.0' })
+export function createServer() {
+  const server = new McpServer({ name: 'dsh-model-deploy', version: '0.1.0' })
 
-server.registerTool('model_inspect', {
-  description: 'Inspect an ONNX model without running inference: shapes, opset, parameter count, operators, size and dynamic inputs.',
-  inputSchema: { model: modelPath },
-}, async ({ model }) => output(await runCli(['inspect', model])))
+  const readOnlyLocal = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  }
 
-server.registerTool('deployment_environment', {
-  description: 'Probe the current machine for OS, CPU, RAM, NVIDIA GPU, ONNX Runtime providers, SSH and SCP.',
-}, async () => output(await runCli(['env'])))
+  const readOnlyRemote = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  }
 
-server.registerTool('benchmark_local', {
-  description: 'Benchmark an ONNX model on the current machine with ONNX Runtime and optionally evaluate deployment constraints. Without `provider`, CUDA is tried when listed and CPU is used if it fails to load.',
-  inputSchema: {
-    model: modelPath,
-    provider: z.string().optional(),
-    warmup: z.number().int().min(0).max(1000).default(10),
-    runs: z.number().int().min(1).max(10000).default(50),
-    ...gateInputs,
-    ...shapeInputs,
-  },
-}, async ({ model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
-  const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
-  if (provider) args.push('--provider', provider)
-  return output(await runCli(args))
-})
+  const remoteBenchmark = {
+    // The runner/model are copied to a temporary directory and executed remotely.
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  }
 
-server.registerTool('ssh_preflight', {
-  description: 'Check whether an SSH target is benchmark-ready (python3, numpy, onnxruntime and its providers) without copying anything. Run before benchmark_remote_ssh.',
-  inputSchema: { target: z.string().min(1).describe('SSH host alias or user@host') },
-}, async ({ target }) => output(await runCli(['ssh-preflight', target])))
+  server.registerTool('model_inspect', {
+    description: 'Inspect an ONNX model without running inference: shapes, opset, parameter count, operators, size and dynamic inputs.',
+    inputSchema: { model: modelPath },
+    annotations: readOnlyLocal,
+  }, async ({ model }) => output(await runCli(['inspect', model])))
 
-server.registerTool('benchmark_remote_ssh', {
-  description: 'Agentlessly benchmark an ONNX model on a POSIX SSH target using its existing Python and ONNX Runtime environment. Credentials remain in the user SSH configuration/agent.',
-  inputSchema: {
-    target: z.string().min(1).describe('SSH host alias or user@host'),
-    model: modelPath,
-    provider: z.string().optional(),
-    warmup: z.number().int().min(0).max(1000).default(10),
-    runs: z.number().int().min(1).max(10000).default(50),
-    ...gateInputs,
-    ...shapeInputs,
-  },
-}, async ({ target, model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
-  const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
-  if (provider) args.push('--provider', provider)
-  return output(await runCli(args))
-})
+  server.registerTool('deployment_environment', {
+    description: 'Probe the current machine for OS, CPU, RAM, NVIDIA GPU, ONNX Runtime providers, SSH and SCP.',
+    inputSchema: {},
+    annotations: readOnlyLocal,
+  }, async () => output(await runCli(['env'])))
 
-await server.connect(new StdioServerTransport())
+  server.registerTool('benchmark_local', {
+    description: 'Benchmark an ONNX model on the current machine with ONNX Runtime and optionally evaluate deployment constraints. Without `provider`, CUDA is tried when listed and CPU is used if it fails to load.',
+    inputSchema: {
+      model: modelPath,
+      provider: z.string().optional(),
+      warmup: z.number().int().min(0).max(1000).default(10),
+      runs: z.number().int().min(1).max(10000).default(50),
+      ...gateInputs,
+      ...shapeInputs,
+    },
+    annotations: readOnlyLocal,
+  }, async ({ model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
+    const args = ['bench', model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
+    if (provider) args.push('--provider', provider)
+    return output(await runCli(args))
+  })
+
+  server.registerTool('ssh_preflight', {
+    description: 'Check whether an SSH target is benchmark-ready (python3, numpy, onnxruntime and its providers) without copying anything. Run before benchmark_remote_ssh.',
+    inputSchema: { target: z.string().min(1).describe('SSH host alias or user@host') },
+    annotations: readOnlyRemote,
+  }, async ({ target }) => output(await runCli(['ssh-preflight', target])))
+
+  server.registerTool('benchmark_remote_ssh', {
+    description: 'Agentlessly benchmark an ONNX model on a POSIX SSH target using its existing Python and ONNX Runtime environment. Credentials remain in the user SSH configuration/agent.',
+    inputSchema: {
+      target: z.string().min(1).describe('SSH host alias or user@host'),
+      model: modelPath,
+      provider: z.string().optional(),
+      warmup: z.number().int().min(0).max(1000).default(10),
+      runs: z.number().int().min(1).max(10000).default(50),
+      ...gateInputs,
+      ...shapeInputs,
+    },
+    annotations: remoteBenchmark,
+  }, async ({ target, model, provider, warmup, runs, inputShapes, defaultDynamicDim, ...gate }) => {
+    const args = ['remote-bench', target, model, '--warmup', String(warmup), '--runs', String(runs), ...shapeArgs(inputShapes, defaultDynamicDim), ...gateArgs(gate)]
+    if (provider) args.push('--provider', provider)
+    return output(await runCli(args))
+  })
+
+  return server
+}
+
+const entrypoint = process.argv[1]
+if (entrypoint && path.resolve(entrypoint) === fileURLToPath(import.meta.url)) {
+  await createServer().connect(new StdioServerTransport())
+}

@@ -1,5 +1,7 @@
 # dsh-model-deploy
 
+[![M8ven Verified](https://m8ven.ai/badge/mcp/ethanrise/dsh-model-deploy?variant=verified)](https://m8ven.ai/mcp/ethanrise/dsh-model-deploy?s=readme)
+
 **Local or remote AI model deployment benchmarking for real hardware targets.**
 
 `dsh-model-deploy` helps answer a practical deployment question: **will this model meet my requirements on the machine that will actually run it?**
